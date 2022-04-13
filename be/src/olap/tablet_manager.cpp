@@ -39,7 +39,6 @@
 #include "olap/push_handler.h"
 #include "olap/reader.h"
 #include "olap/rowset/column_data_writer.h"
-#include "olap/rowset/rowset_factory.h"
 #include "olap/rowset/rowset_id_generator.h"
 #include "olap/schema_change.h"
 #include "olap/tablet.h"
@@ -1097,34 +1096,25 @@ OLAPStatus TabletManager::_create_initial_rowset_unlocked(const TCreateTabletReq
         VLOG_NOTICE << "begin to create init version. version=" << version;
         RowsetSharedPtr new_rowset;
         do {
-            RowsetWriterContext context;
-            context.rowset_id = StorageEngine::instance()->next_rowset_id();
-            context.tablet_uid = tablet->tablet_uid();
-            context.tablet_id = tablet->tablet_id();
-            context.partition_id = tablet->partition_id();
-            context.tablet_schema_hash = tablet->schema_hash();
-            context.data_dir = tablet->data_dir();
+            RowsetTypePB rowset_type = BETA_ROWSET;
             if (!request.__isset.storage_format ||
                 request.storage_format == TStorageFormat::DEFAULT) {
-                context.rowset_type = StorageEngine::instance()->default_rowset_type();
+                rowset_type = StorageEngine::instance()->default_rowset_type();
             } else if (request.storage_format == TStorageFormat::V1) {
-                context.rowset_type = RowsetTypePB::ALPHA_ROWSET;
+                rowset_type = RowsetTypePB::ALPHA_ROWSET;
             } else if (request.storage_format == TStorageFormat::V2) {
-                context.rowset_type = RowsetTypePB::BETA_ROWSET;
+                rowset_type = RowsetTypePB::BETA_ROWSET;
             } else {
                 LOG(ERROR) << "invalid TStorageFormat: " << request.storage_format;
-                DCHECK(false);
-                context.rowset_type = StorageEngine::instance()->default_rowset_type();
+                return OLAP_ERR_CE_CMD_PARAMS_ERROR;
             }
-            context.path_desc = tablet->tablet_path_desc();
-            context.tablet_schema = &(tablet->tablet_schema());
-            context.rowset_state = VISIBLE;
-            context.version = version;
+            if (rowset_type != BETA_ROWSET) {
+                LOG(WARNING) << "Only support beta rowset now, alpha rowset is not supported any more";
+                return OLAP_ERR_CE_CMD_PARAMS_ERROR;
+            }
             // there is no data in init rowset, so overlapping info is unknown.
-            context.segments_overlap = OVERLAP_UNKNOWN;
-
             std::unique_ptr<RowsetWriter> builder;
-            res = RowsetFactory::create_rowset_writer(context, &builder);
+            res = tablet->create_rowset_writer(version, VISIBLE, OVERLAP_UNKNOWN, &builder);
             if (res != OLAP_SUCCESS) {
                 LOG(WARNING) << "failed to init rowset writer for tablet " << tablet->full_name();
                 break;

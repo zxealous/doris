@@ -37,7 +37,6 @@
 #include "olap/file_helper.h"
 #include "olap/olap_define.h"
 #include "olap/rowset/alpha_rowset_meta.h"
-#include "olap/rowset/rowset_factory.h"
 #include "olap/rowset/rowset_meta_manager.h"
 #include "olap/storage_engine.h"
 #include "olap/tablet_meta_manager.h"

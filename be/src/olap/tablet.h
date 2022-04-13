@@ -255,6 +255,13 @@ public:
         return _tablet_meta->all_beta();
     }
 
+    Status create_rowset_writer(Version& version, const RowsetStatePB& rowset_state, 
+                                const SegmentsOverlapPB& overlap, std::unique_ptr<RowsetWriter>* rowset_writer);
+
+    Status create_rowset_writer(const int64_t& txn_id, const PUniqueId& load_id, 
+                                const RowsetStatePB& rowset_state, const SegmentsOverlapPB& overlap, 
+                                std::unique_ptr<RowsetWriter>* rowset_writer);
+
 private:
     OLAPStatus _init_once_action();
     void _print_missed_versions(const std::vector<Version>& missed_versions) const;
