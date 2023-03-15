@@ -128,7 +128,10 @@ FileBlocks LRUFileCache::get_impl(const Key& key, const TUniqueId& query_id, boo
     }
 
     FileBlocks result;
+    // (zcy)获取比当前请求的left大的一个segment(也是cell,cell是更大的一个)
     auto segment_it = file_segments.lower_bound(range.left);
+    // 如果是下面两种情况，返回的迭代器则是end()(segment{N}代表当前的key对应的最后一个segment)
+    // 这里这个if else判断主要是为了处理与需求区间重叠的第一个segment
     if (segment_it == file_segments.end()) {
         /// N - last cached segment for given file key, segment{N}.offset < range.left:
         ///   segment{N}                       segment{N}
@@ -136,7 +139,7 @@ FileBlocks LRUFileCache::get_impl(const Key& key, const TUniqueId& query_id, boo
         ///     [__________]         OR                  [________]
         ///     ^                                        ^
         ///     range.left                               range.left
-
+        // 获取file_segments中的最后一个segment(cell),如果是第二种情况，则返回{}，如果是第一种情况，则使用这个cell
         const auto& cell = file_segments.rbegin()->second;
         if (cell.file_segment->range().right < range.left) {
             return {};
@@ -144,6 +147,7 @@ FileBlocks LRUFileCache::get_impl(const Key& key, const TUniqueId& query_id, boo
 
         use_cell(cell, query_id, is_persistent, result, cache_lock);
     } else { /// segment_it <-- segmment{k}
+        // 上面找不到的时候才会从最后面找最后一个segment，else里是处理lower_bound能够找到segment的情况，
         if (segment_it != file_segments.begin()) {
             const auto& prev_cell = std::prev(segment_it)->second;
             const auto& prev_cell_range = prev_cell.file_segment->range();
@@ -165,6 +169,19 @@ FileBlocks LRUFileCache::get_impl(const Key& key, const TUniqueId& query_id, boo
         ///  ^                              ^                           ^   segment{k}.offset
         ///  range.left                     range.left                  range.right
 
+        // 循环遍历当前FileBlocks(FileBlocksByOffset)中的FileBlockCell，只要是在range区间范围内的都会push到result中
+        // 这里注意，这里处理时只包含上面三种情况，小于当前range.left的segment是在上面的else里处理的
+        // 如：   segment{k-1}已经在else条件里push到了result中
+        // segment{k-1}segment{k}
+        // [__________][_______]
+        //        ^
+        //        range.left
+        // 经过循环，已有的segment与range有重叠的部分已经全部在result中，但是中间有可能会有缺失的部分。
+        // segment{k-1}     segment{k}
+        // [__________]     [_______]
+        //                ^
+        //                range.left
+        // 上述这种情况，那在rang.left到segment{k}.left则会出现empty
         while (segment_it != file_segments.end()) {
             const auto& cell = segment_it->second;
             if (range.right < cell.file_segment->range().left) {

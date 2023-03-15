@@ -45,12 +45,16 @@ Status CachedRemoteFileReader::close() {
 
 std::pair<size_t, size_t> CachedRemoteFileReader::_align_size(size_t offset,
                                                               size_t read_size) const {
+    // (zcy)通过硬编码的方式限制segment最小为4k  最大可配置，为file_cache_max_file_segment_size
     size_t segment_size = std::min(std::max(read_size, (size_t)4096), // 4k
                                    (size_t)config::file_cache_max_file_segment_size);
+    // (zcy)转换为下一个2的整数倍，如 5000， 则转换完为8192，为什么这样呢？这样可能会有读放大吧？
     segment_size = BitUtil::next_power_of_two(segment_size);
     size_t left = offset;
-    size_t right = offset + read_size - 1;
+    size_t right = offset + read_size - 1; /* (zcy) 防止读到最后一位的时候扩大区间*/
     size_t align_left = (left / segment_size) * segment_size;
+    // (zcy)除以segment_size是为了取整，如offset为4000，read_size为4010，segment_size为4096
+    // 防止读到最后一位的时候扩大区间,如果offset+read_size，也就是右区间为4096，那么除以segment_size后就已经是1了，再加1就相当与8192了，实际上只需要读[0,4096]
     size_t align_right = (right / segment_size + 1) * segment_size;
     align_right = align_right < size() ? align_right : size();
     size_t align_size = align_right - align_left;
@@ -117,6 +121,7 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result,
 
     size_t empty_start = 0;
     size_t empty_end = 0;
+    // empty_segments中会包含某些range是已经下载好的,所以130行相当于可能会存在读放大？
     if (!empty_segments.empty()) {
         empty_start = empty_segments.front()->range().left;
         empty_end = empty_segments.back()->range().right;
@@ -135,6 +140,7 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result,
             stats.write_in_file_cache++;
             stats.bytes_write_in_file_cache += segment_size;
         }
+        // (zcy)如果empty(即从remote直接拉回来的数据)的区间，如果在request的区间内，则这之间的数据直接拷贝到result中的指定位置(copy_left_offset - offset)
         // copy from memory directly
         size_t right_offset = offset + result.size - 1;
         if (empty_start <= right_offset && empty_end >= offset) {
@@ -150,19 +156,24 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result,
     }
 
     size_t current_offset = offset;
+    // end offset代表最后一个要读的字节所在的偏移位置，而不是说不读的字节，因为segment.rang().right可以理解为[)，
+    // right所在的偏移位置的下一个字节也是属于当前segment的，可以看下面的介绍
     size_t end_offset = offset + bytes_req - 1;
     *bytes_read = 0;
     for (auto& segment : holder.file_segments) {
         if (current_offset > end_offset) {
             break;
         }
+        // 假设segment只有1个字节，那么segment相当于[0,1)，所以left、right都是0，但是可以从segment中读出1个字节
         size_t left = segment->range().left;
         size_t right = segment->range().right;
         if (right < offset) {
             continue;
         }
+        // 取end_offset和right中最小的值作为当前要读的右边界。
         size_t read_size =
                 end_offset > right ? right - current_offset + 1 : end_offset - current_offset + 1;
+        // left,right在本次下载的 segment区间内，即[empty_start, empty_end]，这里只记录，不再读，因为数据已经通过memcpy完成了拷贝
         if (empty_start <= left && right <= empty_end) {
             *bytes_read += read_size;
             current_offset = right + 1;
